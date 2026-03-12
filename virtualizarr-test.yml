@@ -1,0 +1,9 @@
+name: virtualizarr
+channels:
+- conda-forge
+- nodefaults
+dependencies:
+- virtualizarr >=2.1.2,<3
+- ipykernel >=6.30.1,<7
+
+

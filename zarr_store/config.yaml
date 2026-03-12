@@ -1,0 +1,12 @@
+inline_chunk_threshold_bytes: null
+get_partial_values_concurrency: null
+compression: null
+max_concurrent_requests: null
+caching: null
+storage: null
+virtual_chunk_containers:
+  file:///Users/u1166368/scratch/virtualizarr/:
+    name: null
+    url_prefix: file:///Users/u1166368/scratch/virtualizarr/
+    store: !local_file_system /Users/u1166368/scratch/virtualizarr/zarr_store
+manifest: null

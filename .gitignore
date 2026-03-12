@@ -1,0 +1,8 @@
+# pixi environments
+.pixi/*
+!.pixi/config.toml
+
+.env
+*.nc
+tos_Omon_CESM2-WACCM_historical_r2i1p1f1_gr_185001-201412.nc
+ocean-3d-pot_rho_0-1-monthly-mean-ym_1900_01.nc

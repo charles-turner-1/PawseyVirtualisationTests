@@ -1,0 +1,24 @@
+[workspace]
+channels = ["conda-forge"]
+name = "virtualizarr"
+platforms = ["osx-arm64"]
+version = "0.1.0"
+
+[tasks]
+
+[dependencies]
+virtualizarr = ">=2.1.2,<3"
+ipykernel = ">=6.30.1,<7"
+h5netcdf = ">=1.8.1,<2"
+s3fs = ">=2026.2.0,<2027"
+cftime = ">=1.6.5,<2"
+obspec_utils = ">=0.9.0,<0.10"
+numcodecs = ">=0.16.5,<0.17"
+zarr = ">=3.1.5,<4"
+dask = ">=2026.1.2,<2027"
+icechunk = ">=1.1.19,<2"
+matplotlib = ">=3.10.8,<4"
+pyparsing = ">=3.3.2,<4"
+kerchunk = ">=0.2.9,<0.3"
+fastparquet = ">=2025.12.0,<2026"
+python-dotenv = ">=1.2.2,<2"
