@@ -4,6 +4,9 @@ name = "virtualizarr"
 platforms = ["osx-arm64"]
 version = "0.1.0"
 
+[environments]
+virtualizarr = ["default"]
+
 [tasks]
 
 [dependencies]
