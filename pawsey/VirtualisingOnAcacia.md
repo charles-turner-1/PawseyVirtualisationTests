@@ -54,7 +54,7 @@ To my knowledge, Martin Durant (who originally conceived of kerchunk to do this)
 All in all - even on a posix filesystem, a virtualised dataset is a way better solution than a bunch of netCDF files, and unless we change from lustre, it's also workable from an inode perspective, unlike reserialising everything as zarr. (Again, I'm totally ignoring sharding and zipped zarr stores here.)
 
 ___
-## Getting this all woring on Pawsey
+## Getting this all working on Pawsey
 
 Getting started on Acacia was really straightfoward. I've used GCS for some personal stuff before, thanks to their forever free tier, but I'd never played with S3/Ceph, and I'd only been on Setonix once or twice before. Luckily, their documentation has clearly been actually used, because I just followed along (No LLM helping me!) and was able to get set up in under an hour.
 
@@ -70,64 +70,78 @@ After I got the bucket setup and some data copied in, I spent a few hours poking
 
 What I tried
 
-- Opening a single NetCDF from `s3://01deg` with `xarray` (anonymous reads, `h5netcdf`) to confirm the files and permissions.
-- Using `virtualizarr` with `HDFParser` and an `S3Store` registry to build a virtual dataset across multiple files (`open_virtual_mfdataset`).
-- Persisting the combined virtual dataset in several forms: an `icechunk` repository, a kerchunk JSON reference, and a parquet reference file for testing.
+- Open a single NetCDF over S3 to check permissions and basic reads: `xarray` + `h5netcdf` with anonymous client options against `s3://01deg`.
+- Use `virtualizarr` (the `HDFParser` + `S3Store` combo) to build a virtual dataset across many files via `open_virtual_mfdataset`.
+- Persist the combined virtual dataset in a few formats for downstream testing: an `icechunk` repo, a kerchunk JSON reference, and a parquet reference file.
 
-What happened
+What actually happened
 
-- `virtualizarr` successfully virtualised individual NetCDF files and combined them into a single `vds` that behaves like a normal `xarray` dataset.
-- Some source files did not include explicit `ni`/`nj` coordinates; assigning `ni = np.arange(...)` and `nj = np.arange(...)` preserved spatial indexing through virtualisation.
-- Writing kerchunk references (JSON or parquet) into the bucket made the dataset trivially consumable by `xarray.open_dataset` using the `reference://` Zarr backend and the appropriate remote options.
-- Interactive plotting of small spatial slices was fast (order of 0.5–1s) when streaming via the kerchunk/virtual path. A very small `dask` client (single-thread workers) was enough for these tests.
+- `virtualizarr` did exactly what it promised: the individual netCDFs got virtualised and stitched into one `vds` that behaves just like a normal `xarray` dataset.
+- A few source files lacked explicit `ni`/`nj` coords. I assigned `ni = np.arange(...)` and `nj = np.arange(...)` before virtualising and that preserved spatial indexing through the pipeline.
+- Dropping kerchunk references (JSON/parquet) into the bucket made the dataset trivial to open with `xarray.open_dataset("reference://...", engine="zarr", backend_kwargs={...})`.
+- Small interactive plots (tiny spatial slices) were snappy — roughly 0.5–1s — when streamed via the kerchunk/virtual path. A tiny local `dask` client (single-thread workers) was sufficient for these quick interactions.
 
-Lessons & gotchas
+Lessons and gotchas
 
-- Anonymous reads: use `anon=True` with `client_kwargs` that point to `https://projects.pawsey.org.au` for public access. For write or private-read operations, provide `ACCESS_KEY_ID` / `SECRET_ACCESS_KEY` to `S3Store` and `icechunk`.
-- Codec and backend quirks: register `numcodecs.zarr3` when required and prefer `consolidated=False` for these workflows; suppress the benign numcodecs warnings if they clutter logs. Note that suppressing warnings doesn't work if you're using a dask cluster, because suppressing warnings is a local operation and won't affect workers that are running in separate processes or machines. In that case, you may need to configure logging on the workers to ignore those specific warnings.
-- S3 compatibility: set `force_path_style=True` and supply `endpoint_url` for S3-compatible backends like Acacia.
+- Anonymous reads: for public access use `anon=True` and `client_kwargs` pointing at `https://projects.pawsey.org.au`. If you need writes or private reads then supply `ACCESS_KEY_ID` / `SECRET_ACCESS_KEY` to `S3Store` and `icechunk`.
+- Backend oddities: register `numcodecs.zarr3` when needed and prefer `consolidated=False` for this workflow. If warnings get noisy, suppress them locally — but remember that suppression doesn't propagate to separate Dask workers, so you may need to configure worker logging.
+- S3 quirks: use `force_path_style=True` and set the right `endpoint_url` for Acacia (or any S3-compatible store).
 
 Why this matters
 
-By keeping the data virtual and publishing kerchunk references, we can serve large model output without duplicating the heavy binary payloads. Consumers can stream exactly the slice they need, and the same kerchunk reference works for both anonymous viewers and credentialed clients (with the right storage options).
+Publishing kerchunk references lets you serve arbitrarily large model output without copying the petabytes. Consumers stream exactly what they need and the same reference file works for both anonymous and credentialed clients (provided the storage options are set correctly).
 
-How to reproduce (quick)
+Quick reproduction
 
-1. Try an anonymous open: `xr.open_dataset("s3://01deg/output980/iceh.2146-01.nc", engine="h5netcdf", backend_kwargs={"storage_options": {"anon": True, "client_kwargs": {"endpoint_url": "https://projects.pawsey.org.au"}}})`
-2. Build a combined virtual dataset with `open_virtual_mfdataset(..., parallel="dask", combine="nested", concat_dim="time")` and add `ni`/`nj` coords if missing.
-3. Export `vds.vz.to_kerchunk(format='json')` and place the produced reference in the bucket. Open via `reference://` + `zarr` backend in `xarray` for remote plotting.
+1. Anonymous open (sanity check):
 
-Next steps
+```bash
+python -c "import xarray as xr; xr.open_dataset('s3://01deg/output980/iceh.2146-01.nc', engine='h5netcdf', backend_kwargs={'storage_options': {'anon': True, 'client_kwargs': {'endpoint_url': 'https://projects.pawsey.org.au'}}})"
+```
 
-- Add a small runnable example snippet to this page (anon vs credentialed), and a short checklist for writing kerchunk references back to Acacia.
-- Test a larger time range with a small Dask cluster to validate performance at scale.
+2. Build a combined virtual dataset:
+
+Use `open_virtual_mfdataset(..., parallel='dask', combine='nested', concat_dim='time')` and add missing `ni`/`nj` coords before virtualising.
+
+3. Export kerchunk reference and open remotely:
+
+```py
+# inside notebook
+vds.vz.to_kerchunk(format='json')
+# upload the produced reference.json to your bucket and then open with reference:// + zarr backend
+```
+
+Next things to do
+
+- Add a compact runnable snippet to this page showing anonymous vs credentialed opens.
+- Spin up a tiny Dask cluster and test a longer time slice to validate behaviour at scale.
 
 — end of notes
 
 ## Bucket permissions & CORS
 
-To make the bucket readable anonymously and avoid unnecessary CORS preflight requests from browsers, apply two small changes to the bucket: a public read policy (for objects) and a conservative CORS configuration that only allows simple `GET`/`HEAD` requests from the origins you need.
+If you want anonymous, fast reads from browsers you need just two small changes on the bucket: a public-read policy for objects and a minimal CORS configuration that only allows simple `GET`/`HEAD` calls from the origins you actually use. That keeps preflight traffic low and avoids forcing users through auth flows.
 
 1) Public read for objects
 
-Create a `public-read.json` policy (replace `<BUCKET_NAME>` with your bucket, e.g. `01deg`):
+Create a `public-read.json` (replace `<BUCKET_NAME>`):
 
 ```json
 {
-	"Version": "2012-10-17",
-	"Statement": [
-		{
-			"Sid": "PublicReadGetObject",
-			"Effect": "Allow",
-			"Principal": "*",
-			"Action": "s3:GetObject",
-			"Resource": "arn:aws:s3:::<BUCKET_NAME>/*"
-		}
-	]
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "PublicReadGetObject",
+      "Effect": "Allow",
+      "Principal": "*",
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::<BUCKET_NAME>/*"
+    }
+  ]
 }
 ```
 
-Apply it with the AWS CLI (use `--endpoint-url` for Acacia / S3-compatible endpoints):
+Apply it using the AWS CLI (remember `--endpoint-url` for Acacia):
 
 ```bash
 aws --endpoint-url=https://projects.pawsey.org.au s3api put-bucket-policy --bucket <BUCKET_NAME> --policy file://public-read.json
@@ -135,33 +149,33 @@ aws --endpoint-url=https://projects.pawsey.org.au s3api put-bucket-policy --buck
 
 2) Minimal CORS (avoid preflight)
 
-Browsers only send a CORS preflight (OPTIONS) when a request is not a "simple request" (method other than GET/HEAD/POST, or custom headers). To avoid preflights, ensure clients use simple GET/HEAD requests without custom headers, and configure a CORS policy that allows those methods from your origin(s). Example `cors.json` that permits simple GET/HEAD from any origin:
+Browsers send OPTIONS preflight when a request isn't "simple" (e.g. custom headers). To avoid that, make your clients issue plain GET/HEAD without custom headers and set a CORS policy that allows those methods. A permissive example (but prefer locking down origins):
 
 ```json
 {
-	"CORSRules": [
-		{
-			"AllowedOrigins": ["*"],
-			"AllowedMethods": ["GET", "HEAD"],
-			"AllowedHeaders": ["*"] ,
-			"MaxAgeSeconds": 3000
-		}
-	]
+  "CORSRules": [
+    {
+      "AllowedOrigins": ["*"],
+      "AllowedMethods": ["GET", "HEAD"],
+      "AllowedHeaders": ["*"],
+      "MaxAgeSeconds": 3000
+    }
+  ]
 }
 ```
 
-Apply it with:
+Apply with:
 
 ```bash
 aws --endpoint-url=https://projects.pawsey.org.au s3api put-bucket-cors --bucket <BUCKET_NAME> --cors-configuration file://cors.json
 ```
 
-Notes and best practices
+Notes and best practice
 
-- Prefer restricting `AllowedOrigins` to the exact origin(s) that will fetch kerchunk references (instead of `*`) for better security.
-- To truly avoid preflight requests, ensure clients do not send custom headers (for example, do not send `Authorization` or other non-simple headers) and use anonymous GET requests. If credentials are required, a CORS preflight is more likely and the server must accept it.
-- For S3-compatible stores (Acacia), include `--endpoint-url` and `--profile` as needed; also use `force_path_style=True` in clients if required by your object store.
-- Verify with:
+- Prefer restricting `AllowedOrigins` to the exact origin(s) rather than `*` for security.
+- To really avoid preflight, clients must not send custom headers (no `Authorization`). If you must use credentials, expect preflights and configure the server accordingly.
+- For Acacia and other S3-compatible stores: always pass `--endpoint-url` and consider `force_path_style=True` in clients.
+- Quick checks:
 
 ```bash
 aws --endpoint-url=https://projects.pawsey.org.au s3api get-bucket-policy --bucket <BUCKET_NAME>
@@ -169,86 +183,115 @@ aws --endpoint-url=https://projects.pawsey.org.au s3api get-bucket-cors --bucket
 curl -I https://projects.pawsey.org.au/<BUCKET_NAME>/reference.json
 ```
 
-If you want, I can add the exact commands you used in your environment (I saw `aws --endpoint-url=https://projects.pawsey.org.au s3api put-bucket-policy --bucket icechunk-demo --policy file://public-read.json` in your terminal history) into the doc as a short reproducible snippet.
+If you want I can drop the exact CLI invocations you used into this repo (public-read.json, list-policy.json, cors.json) so guys can copy-paste.
 
-### Exact policy files and commands (from your terminal history)
+### Exact policy files & commands (from your shell history)
 
-Below are the actual policy JSON snippets and the exact AWS CLI commands pulled from your terminal history for the `icechunk-demo` bucket. Use these as copy-paste snippets.
+These are the snippets you used for `icechunk-demo` (cleaned up):
 
-`public-read.json` (actual content used):
-
-```json
-{
-	"Version": "2012-10-17",
-	"Statement": [
-		{
-			"Sid": "PublicReadGetObject",
-			"Effect": "Allow",
-			"Principal": "*",
-			"Action": "s3:GetObject",
-			"Resource": "arn:aws:s3:::icechunk-demo/*"
-		}
-	]
-}
-```
-
-`list-policy.json` (actual content used):
+`public-read.json`:
 
 ```json
 {
-	"Version": "2012-10-17",
-	"Statement": [
-		{
-			"Effect": "Allow",
-			"Principal": {"AWS": ["arn:aws:iam:::user/cturner"]},
-			"Action": "s3:ListBucket",
-			"Resource": ["arn:aws:s3:::icechunk-demo"]
-		}
-	]
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "PublicReadGetObject",
+      "Effect": "Allow",
+      "Principal": "*",
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::icechunk-demo/*"
+    }
+  ]
 }
 ```
 
-Exact CLI invocations (as found in your shell history):
+`list-policy.json`:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {"AWS": ["arn:aws:iam:::user/cturner"]},
+      "Action": "s3:ListBucket",
+      "Resource": ["arn:aws:s3:::icechunk-demo"]
+    }
+  ]
+}
+```
+
+Commands you ran (cleaned):
 
 ```bash
 aws --endpoint-url=https://projects.pawsey.org.au s3api put-bucket-policy --bucket icechunk-demo --policy file://public-read.json
 aws --endpoint-url=https://projects.pawsey.org.au s3api put-bucket-policy --bucket icechunk-demo --policy file://list-policy.json
 aws --endpoint-url=https://projects.pawsey.org.au s3api put-bucket-cors --bucket icechunk-demo --cors-configuration file://cors.json
 
-# Variants with profile (seen in history):
+# variants with profile
 aws --endpoint-url=https://projects.pawsey.org.au --profile=cturner s3api put-bucket-policy --bucket icechunk-demo --policy file://public-read.json
 aws --endpoint-url=https://projects.pawsey.org.au --profile=cturner s3api put-bucket-cors --bucket icechunk-demo --cors-configuration file://cors.json
 
-# Verification commands seen in history:
+# verify
 aws --endpoint-url=https://projects.pawsey.org.au s3api get-bucket-policy --bucket icechunk-demo
 aws --endpoint-url=https://projects.pawsey.org.au s3api get-bucket-cors --bucket icechunk-demo
 curl -I https://projects.pawsey.org.au/icechunk-demo/reference.json
 ```
 
-These snippets are verbatim from your terminal selection and have been cleaned to valid JSON where needed. If you want me to keep the exact whitespace/quoting as in the raw history output I can paste that too, or I can write these files into the repo (`public-read.json`, `list-policy.json`, `cors.json`) for you.
+These are the cleaned, copy-paste ready versions. If you prefer the raw history output I can paste that too, or I can add these files to the repo for easy reuse.
 
 ___
 
-# Trying to do the same thing on NCI/Nirin
+# Okay... why?
 
-## Nirin (NCI) — what made this harder
+The guys over at carbonplan have been working on [this visualisation tool](https://github.com/carbonplan/zarr-layer), which I came across recently. I figured this was exactly what we needed in order to produce the over the wire data exploration tool which people wanted.
 
-I reproduced the same virtualisation experiments on Nirin and hit a different set of operational limits compared with Acacia. Key points from the `virtualisation-tests-nirin.ipynb` run:
+Using zarr-layer, [zarrita](https://zarrita.dev/) (a typescript library for dealing with zarr files), and Claude Sonnet 4.6 to speed up the process, I managed to generate [this interactive data explorer](https://charles-turner-1.github.io/personal-homepage/#/projects/zarr-data-streamer) in about 2 hours.
 
-- Protocol & gateway differences: the Nirin setup used both a Swift URL and an S3 gateway (e.g. `https://cloud.nci.org.au:8080/swift/...` and `s3://ct-icechunk-root/...`). Kerchunk remote reads in the notebook used the Swift endpoint. Icechunk attempts used the S3 gateway with `endpoint_url` and credentials.
-- No anonymous S3 reads: the S3 gateway on Nirin did not support anonymous access. This means consumers must either (a) provide credentials, (b) use signed URLs, or (c) have a trusted server in Nirin that fetches data on their behalf. Storing credentials in an interactive catalog or environment is insecure; the notebook notes running a small server in Nirin that can serve xarray reprs is a practical workaround.
-- Performance variability (ARE vs remote): reading kerchunk references via Swift from an ARE session was much slower than remote reads (notably worse on the ARE interactive environment). There are likely multiple causes (Swift gateway performance, network path, authentication overhead); this made the Swift-based kerchunk workflow less usable from ARE.
-- Icechunk vs Swift: icechunk currently lacks Swift support (noted in the notebook), so writing icechunk repositories into Nirin object storage required using the S3 gateway and credentials. That adds operational friction compared with Acacia where anonymous reads were straightforward.
-- Credentials + client options: code in the notebook shows needing `access_key_id` / `secret_access_key`, `endpoint_url`, and `force_path_style=True` when constructing `S3Store` / `icechunk.s3_storage`. Remote options also used `asynchronous=True` and explicit `remote_options` for the `reference://` open.
-- Container headers for Swift: the notebook includes CONTAINER_HEADERS (e.g. `X-Container-Read`, and CORS metadata) to allow anonymous Swift reads; depending on the object-store configuration you may need to set these metadata values on containers rather than using an S3 bucket policy.
-- Compute-node access: a practical blocker is whether compute nodes can talk to the object storage endpoints (Nirin buckets) directly. If not, you must run a service inside Nirin or provide credentials on compute nodes — both have operational/security trade-offs.
+This demo is still obviously very rough and ready - it's still on native grids for a start - but it's clearly a massive improvement over current data exploration tools, and surprisingly easy to get working. It turns out you can get a lot done by grabbing onto the coattails of very smart people.
 
-Recommendations for working on Nirin
+___
 
-- Prefer kerchunk + Swift only if the Swift gateway provides acceptable performance for your interactive environment; otherwise prefer S3 gateway reads with signed URLs or a proxied service.
-- If anonymous S3 reads are required, ask NCI support to enable them for the target bucket (or provide a suitable bucket policy); otherwise plan for a server-side proxy in Nirin that holds credentials and serves kerchunk/JSON to clients.
-- For icechunk deployment, plan to use the S3 gateway with credentials and set `force_path_style=True` and the proper `endpoint_url` in clients; make sure any credentials are provisioned securely (not baked into catalog code).
-- Benchmark both Swift and S3 remote reads from the actual interactive environment you expect to use (ARE, Gadi, etc.) — the notebook shows huge differences depending on where you run the client.
-- Consider moving the interactive catalog (parquet/index files) into Nirin object storage if compute nodes can access it — that reduces cross-infra synchronization and simplifies access patterns.
 
-Short summary: Nirin works, but the S3 gateway’s lack of anonymous access and the Swift/S3 performance differences add friction compared with Acacia. The practical workarounds are: enable anonymous access, use a small trusted proxy inside Nirin, or accept credentialed access with careful secret management.
+# Trying the same thing on NCI / Nirin
+
+So virtualising and streaming data from Acacia works remarkably well. Great!
+
+Unfortunately, we deal with making climate data available to scientists in Austalia, and most of Australia's trove of climate data is hosted on Gadi. This means we have two options (ignoring the sit on our hands approach):
+1. Move the data to Acacia and host it from there. This is a bit of a non starter for a lot of reasons - but most of the work the climate science community does on HPC is on Gadi. So we'd either have to duplicate the data, or stream it back to Gadi. Neither of these are really tenable.
+2. See if we can do the same thing on NCI's object storage, Nirin.
+
+## Why Nirin felt harder
+
+I ran the same experiments on Nirin and hit a different set of operational annoyances compared with Acacia. Short version:
+
+- Protocol & gateway differences: Nirin exposes both Swift and an S3 gateway (e.g. `https://cloud.nci.org.au:8080/swift/...` and `s3://ct-icechunk-root/...`). In these experiments, I accessed the kerchunk reference remotely  via the Swift endpoint while icechunk tests used the S3 gateway + credentials. This is because apparently public reads on Nirin buckets can only be achieved via Swift, not S3.
+- No anonymous S3 reads: the S3 gateway did not allow anonymous access. That means consumers need credentials, signed URLs, or a trusted proxy inside Nirin to serve data. This means that if we want to read the icechunk store remotely, we need to provide credentials, as icechunk doesn't support swift.
+- Performance variability: reads from ARE (interactive environment) over Swift were noticeably slower than remote reads. I think there is some throttling of downloads into an ARE session, for reasons I don't totally understand.
+ With that said, it is still substantially faster to read the virtual references than the raw data: 2 minutes 40 for the non virtualised dataset, 45s for the kerchunk reference over swift into an ARE session, and 2.6 seconds for the kerchunk reference remotely.
+- Weirdly, you don't see the same performance issues with icechunk: it reads in 1.6 seconds from within an ARE session, but takes 2.2 remotely. This makes a bit more sense *a priori*, but it's weird that we see such a massive slowdown via Swift, when it's actually faster via s3. 
+- Icechunk vs Swift: icechunk doesn't speak Swift, so writing icechunk repos required the S3 gateway and credentials — more friction than the Acacia case. 
+
+  This might be less of a big deal than it seems. You can't stream zarr from an icechunk store straight into the browser, so if you want to use the same set of virtual references for both remote data streaming/exploration, and to speed up reads on Gadi, you need to use kerchunk (or set up a server to handle getting data from icechunk to the browser). 
+
+  However, it does mean that the slowdown of kerchunk over Swift is more of an issue. Either we'd need to figure out how to speed up access to the kerchunk reference over Swift, or make the s3 gateway support anonymous reads and then read the kerchunk reference via that.
+- Compute-node access: the other big operational question for putting virtual reference datasets on Gadi is whether compute nodes can talk to Nirin endpoints directly. If they can't, then you'd need to have these references on the posix filesystem somewhere too. This is fine - in theory - but the number of these we'd be creating increases the risk that something gets out of sync. It seems like the atomicity guarantees that Swift provides aren't particularly great either...
+- Documentation: The documentation for Acacia is really pretty clear, and easy to follow. Acacia is built on Ceph, and access if using the aws cli. In contrast, Nirin has multiple access methods (Swift, S3 gateway) and the documentation is a quite a bit less complete. It also doesn't seem to be up to date: lots of things I tried seemed to no longer be true. It also contains gems like this:
+
+    > The Nirin Cloud integrated object storage service supports a subset of the Swift and S3 access control mechanisms, with additional constraints which make them very limited for practical use. The NCI Cloud Team does not recommend the use of anything beyond the simplest case of enabling public read access to a container, which can be done via a simple check box for each container in the dashboard's Object Store → Containers tab.
+
+  Which subset does the Nirin object stoage support? Not documented. And even though it explicitly states that you can set public read access, this only seems to apply to using the Swift Access protocol. In fact, it seems that the bucket policies are not set on the bucket itself, but on the access protocol. So you can have a totally different set of policies depending on whether you try to access it via Swift, or via s3api.
+
+  If someone at NCI knows how to fix this, please let me know!
+    
+
+Recommendations for Nirin
+
+- Use kerchunk + Swift only if the Swift gateway performs well from the interactive environment you plan to use; otherwise use S3 reads with signed URLs or a proxy.
+- If anonymous S3 reads are required, request that from NCI support or plan for a proxy service in Nirin that holds credentials and serves kerchunk JSON.
+- For icechunk, plan to use the S3 gateway with credentials and `force_path_style=True`; handle secrets securely (don’t bake them into notebooks 🫠).
+- Benchmark both Swift and S3 reads from your intended client (ARE, Gadi interactive node, etc.) — performance varies a lot depending on where you run the client.
+- Consider placing the interactive catalog/parquet files in Nirin object storage (if compute nodes can read them) to reduce cross-site syncing.
+
+Bottom line: Nirin is usable, but the lack of anonymous S3 reads and the Swift/S3 performance differences make it more operationally fiddly than Acacia. The usual workarounds are: enable anonymous access, run a small trusted proxy inside Nirin, or accept credentialed access with careful secret management.
