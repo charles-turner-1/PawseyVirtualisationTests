@@ -66,7 +66,7 @@ One step at a time though...
 
 ## Virtualising Climate Data on Acacia 
 
-I spent a few hours poking at the `01deg` bucket and trying to make a fully virtual, remotely-consumable dataset. The result: it works, and it's delightfully straightforward once you know the small gotchas.
+After I got the bucket setup and some data copied in, I spent a few hours poking at the `01deg` bucket and trying to make a virtual, remotely-consumable dataset. A few hours later, I had exaclt what I was after. Here's how it went down: see [this notebook](https://github.com/charles-turner-1/PawseyVirtualisationTests/blob/main/pawsey/vz_01deg.ipynb) if you want to see the full process.
 
 What I tried
 
