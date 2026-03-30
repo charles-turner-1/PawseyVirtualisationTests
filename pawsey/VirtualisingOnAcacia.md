@@ -1,30 +1,48 @@
 # Virtualising & Distibuting Data through Acacia (Pawsey) & Nirin (NCI)
 
 At AMOS 2026 (Hobart, February), we did a bunch of alpha user testing on a new tool we've been working on, [the ACCESS-NRI Interactive Data Catalogue](https://access-nri.github.io/interactive-data-catalogue/#/). 
-This is a tool that lets people click through the catalogue of data that we maintain on Gadi. The key insight that powers this is that the metadata that we trawl, index, and and make available in order to discover what climate data products are available on Gadi is on the order of megabytes, not petabytes, which means that we can ship it straight to the browser. As a result, we can stream data indices for around 20PB of data and let users click through them, virtually in real time.
+This is a tool that lets people click through the catalogue of data that we maintain on Gadi. 
+
+The key insight that powers this is that the metadata that we trawl, index, and and make available in order to discover what climate data products are available on Gadi is on the order of megabytes, not petabytes, which means that we can ship it straight to the browser. As a result, we can stream data indices for around 20PB of data and let users click through them, in pretty much real time.
 
 This all sounds great, but it has a few limitations:
--  We use intake-esm to index our datasets, which are on disk on Gadi, NCI's HPC System. This produces parquet files containing metadata about the datasets in question, but those datasets are still unreachable. As a result, we are unable to display any richer information. 
+-  We use intake-esm to index our datasets. These datasets are on disk on Gadi, NCI's HPC System. Indexing produces parquet files containing metadata about the datasets in question, but those datasets are still unreachable. As a result, we are unable to display any richer information. 
 
-    The pangeo catalog gets around this limitation by using a properly cloud native approach. The datasets, not just the indices are made available through object storage, and this means that they can dump a *full xarray repr* straight into the page (eg. https://catalog.pangeo.io/browse/master/atmosphere/era5_hourly_reanalysis_single_levels_sa/). This is, unfortunately, a major limitation of our Hybrid HPC/Cloud system.
+    The pangeo catalog gets around this limitation by using a properly cloud native approach. The datasets, not just the indices are made available through object storage, and this means that they can dump a *full xarray repr* straight into the page (eg. https://catalog.pangeo.io/browse/master/atmosphere/era5_hourly_reanalysis_single_levels_sa/). With our current approach, this is fundamentally impossible. 
+
+    This is, unfortunately, a major limitation of our Hybrid HPC/Cloud system, because people are used to looking at the results of `xr.open_mfdataset`, and less used to looking at a bunch of data indices wrapped around it.
 
     Unfortunately, if you can't get your hands on the `repr`, which is just an interactive view of the dataset metadata, our hopes of getting anything more interesting are also zero.
 
-- We have to keep our two catalogues manually synced. NCI compute nodes don't have any internet access, and ARE sessions are throttled pretty heavily for reasons I still don't fully understand. Whilst you can create an intake-esm datastore with local paths and dump it into object storage (the paths will then only work if you download that datstore to the correct machine), the download performance on ARE makes this a generally fairly poor experience for the user. If they want to access a catalog in object storage from a compute node, they're totally out of luck. (Well, maybe not totally... NCI have their own cloud, Nirin, which compute nodes might be able to talk to?)
+- We have to keep two catalogues manually synced: one on disk (Gadi), and one in object storage (currently, [ARDC's Nectar](https://ardc.edu.au/services/ardc-nectar-research-cloud/)). NCI compute nodes don't have any internet access, and ARE sessions seem to be throttled pretty heavily for reasons I still don't fully understand. 
 
-- Users still need to get themselves on NCI in order to access the data. This might be straightforward, if they're in a university research group with other NCI users, or they know someone with a compute allocation who is happy to add them to their project. In theory, anyone with an Australian academic or government email address should be able to get themselves onto NCI to look at this data (as far as I'm aware). In practice, this is going to limit data access to people who already know how to access it - despite our best efforts.
+  Whilst you can create an intake-esm datastore with local paths and dump it into object storage (the paths will then only work if you download that datastore to the machine it was built on, but you can explore them anywhere), the download performance on ARE makes this a generally fairly poor experience for the user - better to keep it on disk locally. 
 
+  If they want to access a catalog in object storage from a compute node, they're totally out of luck. (Well, maybe not totally... NCI have their own cloud, Nirin, which compute nodes might be able to talk to? More on that later!)
 
-When we were gathering feedback on the tool, a few people mentioned that it would be really handy to actually look at the data itself when exploring the data. This is a much bigger task - it's a lot easier to ship a few megabytes than several petabytes. Actually shipping the data, rather than just a metadata index, means figuring out a way to let users actually download the slice of the data they're interested in looking at. This means you have a couple of hard requirements:
-1. You cannot build a system that forces a user to download an entire netCDF file in order to look at a subset of it. If that netCDF file is 25GB, there's just no way of doing it in real time, even in the highly unrealistic case that you somehow manged to saturate the 10GB/s bandwith that is in theory available over ethernet.
-2. You need to be able to anonymously & instantaneously access data. I have no real evidence of this, but I've clicked away from enough sites that have tried to get me register to access a resource, or decided that I don't care enough to watch the whole way through an advert on youtube, that I firmly believe this. In the TikTok era, you cannot get someone to register, select a slice of data, click 'Submit request', and then wait 5 minutes for a server to open, subset, serialise, and send you that slice. People just don't care that much.
+- Users still need to get themselves on NCI in order to access the data. This might be straightforward, if they're in a university research group with other NCI users, or they know someone with a compute allocation who is happy to add them to their project. 
+
+   **In theory, anyone with an Australian academic or government email address should be able to get themselves onto NCI to look at this data (as far as I'm aware). In practice, this is going to limit data access to people who already know how to access it. If we want this data to be used to it's full potential, we need to do better.**
+
+---
+
+When we were gathering feedback on the interactive catalogue tool, a few people mentioned that it would be really handy to actually look at the data itself when exploring the data. This is a much bigger task - it's a lot easier to ship a few megabytes than several petabytes. Actually shipping the data, rather than just a metadata index, means figuring out a way to let users actually download the slice of the data they're interested in looking at. This means you have a couple of hard requirements:
+1. You cannot build a system that forces a user to download an entire netCDF file in order to look at a subset of it. If that netCDF file is 25GB, there's just no way of doing it in real time, even in the totally unrealistic case that you somehow manged to saturate the 10GB/s bandwith that is in theory available through your computers ethernet port.
+2. You need to be able to anonymously & instantaneously access data. I have no real evidence of this, but  think of all the times that you've (and I'm talking from experience here):
+    - Tried to access some data, only to be told to register for an account. Can you really be bothered to?  
+    - Shut a page because it was loading slowly (I think Agoda found anything over 300ms loses something like half the visitors before it finishes opening).
+    - Decided a Youtube video wasn't worth waiting for the ads to finish.
+
+    People just don't care that much, and especially if they don't know whether they're going to find the resources they're looking for. Things need to be fast, and slick.
+
 3. The data needs to be on an HPC system, somehow. This is Australia, and we don't do cloud. Maybe in 10 years...
 
 Squaring all these requirements would get a bit tough, if not for some of the amazing infrastructure work done by Tom Nicholas (virtualizarr) and Martin Durant (kerchunk) in particular, as well as the rest of the guys at Earthmover and carbonplan. Without all their hard work, this never would have gotten off the ground.
 
-The second slice of luck is that the Pawsey supercomputing centre, 20 minutes drive from my house in Perth, WA, just so happened to implement an S3 compatible Ceph object store, *Acacia*, instead of a more traditional `gdata` area. Very lucky! 
+The second slice of luck is that I'd recently got an allocation for the Pawsey supercomputing centre, 20 minutes down the road from my house in Perth, WA. 
+When building their HPC system, Pawsey just so happened to implement an S3 compatible Ceph object store, *Acacia*, instead of a more traditional `gdata` area. Very lucky! 
 
-When I first had a crack at this, I wasn't super sure about how easy it was going to be to get what I was after out of Acacia. I've mostly heard people describe it as weird, and/or hard to use. Apparently, it can be a little contrived to spin up a Jupyter sever on Setonix (the HPC proper) and have it read files in Acacia. Fortunately, that's not my use case - I was specifically interested about whether we could use this to ship data to *users who weren't on Acacia*.
+When I first had a crack at this, I wasn't super sure about how easy it was going to be to get what I was after out of Acacia. I've mostly heard people describe it as weird, and/or hard to use. Apparently, it can be a little contrived to spin up a Jupyter sever on Setonix (the HPC proper) and have it read files in Acacia. Fortunately, that's not my use case - I was specifically interested about whether we could use this to ship data to *users who weren't on Setonix*.
 
 
 ___ 
@@ -66,59 +84,155 @@ One step at a time though...
 
 ## Virtualising Climate Data on Acacia 
 
-After I got the bucket setup and some data copied in, I spent a few hours poking at the `01deg` bucket and trying to make a virtual, remotely-consumable dataset. A few hours later, I had exaclt what I was after. Here's how it went down: see [this notebook](https://github.com/charles-turner-1/PawseyVirtualisationTests/blob/main/pawsey/vz_01deg.ipynb) if you want to see the full process.
+After I got the bucket set up and some data copied in, I spent a few hours poking at the `01deg` bucket and trying to make a virtual, remotely-consumable dataset. A few hours later, I had exaclt what I was after. Here's how it went down: see [this notebook](https://github.com/charles-turner-1/PawseyVirtualisationTests/blob/main/pawsey/vz_01deg.ipynb) if you want to see the full process.
 
-What I tried
+## What I did
 
-- Open a single NetCDF over S3 to check permissions and basic reads: `xarray` + `h5netcdf` with anonymous client options against `s3://01deg`.
-- Use `virtualizarr` (the `HDFParser` + `S3Store` combo) to build a virtual dataset across many files via `open_virtual_mfdataset`.
-- Persist the combined virtual dataset in a few formats for downstream testing: an `icechunk` repo, a kerchunk JSON reference, and a parquet reference file.
+- Open a single NetCDF from the bucket over S3 to check permissions and basic reads: `xarray` + `h5netcdf` with anonymous client options against `s3://01deg`. A cold read takes about 7 seconds to open the dataset:
+  ```python
+    import xarray as xr
+    
+    url = "s3://01deg/output980/iceh.2146-01.nc"
+    
+    ds = xr.open_dataset(
+        url,
+        engine="h5netcdf",
+        backend_kwargs={
+            "storage_options": {
+                "anon": True,
+                "client_kwargs": {"endpoint_url": "https://projects.pawsey.org.au"},
+            }
+        },
+    ) 
+    ```
 
-What actually happened
+  If you're following along at home, you should be able to execute this code yourself - it's a publicly readable bucket, and running this code was a (very comfortable) way of proving it to myelf.
+- Use `virtualizarr` (the `HDFParser` + `S3Store` combo) to build a virtual dataset across many files via `open_virtual_mfdataset`. The code for this is remarkably simple:
+  ```python
+  import os
+  from virtualizarr import open_virtual_mfdataset
+  from virtualizarr.parsers import HDFParser
+  import obstore
+  from obstore.store import S3Store
+  from obspec_utils.registry import ObjectStoreRegistry
+  
+  import numcodecs.zarr3  # Register the zarr3 codec
+  
+  from dotenv import load_dotenv
+  
+  load_dotenv()
+  
+  access_key_id = os.environ.get("ACCESS_KEY_ID")
+  secret_access_key = os.environ.get("SECRET_ACCESS_KEY")
+  endpoint = "https://projects.pawsey.org.au"
+  bucket = "s3://01deg"
+  
+  
+  # # create anon s3 store
+  # store = S3Store.from_url(f"{scheme}{path}", endpoint=endpoint, skip_signature=True)
+  
+  # create s3 store with aws-style credentials
+  store = S3Store.from_url(
+      f"{bucket}",
+      endpoint=endpoint,
+      access_key_id=access_key_id,
+      secret_access_key=secret_access_key,
+  )
+  
+  registry = ObjectStoreRegistry({f"{bucket}": store})
+  
+  parser = HDFParser()
+  
+  
+  urls = []
+  for batch in obstore.list(store):
+      for obj in batch:
+              urls.append(obj.get("path"))
 
-- `virtualizarr` did exactly what it promised: the individual netCDFs got virtualised and stitched into one `vds` that behaves just like a normal `xarray` dataset.
-- A few source files lacked explicit `ni`/`nj` coords. I assigned `ni = np.arange(...)` and `nj = np.arange(...)` before virtualising and that preserved spatial indexing through the pipeline.
-- Dropping kerchunk references (JSON/parquet) into the bucket made the dataset trivial to open with `xarray.open_dataset("reference://...", engine="zarr", backend_kwargs={...})`.
-- Small interactive plots (tiny spatial slices) were snappy — roughly 0.5–1s — when streamed via the kerchunk/virtual path. A tiny local `dask` client (single-thread workers) was sufficient for these quick interactions.
+  
+  combined_vds = open_virtual_mfdataset(
+      urls=urls,
+      parser=parser,
+      registry=registry,
+      combine="nested",
+      concat_dim="time",
+      parallel="dask",
+      compat="override",
+      coords=["time"],
+  )
+  ```
 
-Lessons and gotchas
+  For whatever reason, I had to pass credentials to my store. Maybe if I tried an anonymous store without credentials, things would have worked. I didn't bother investigating, because I created my virtual dataset before worrying about making it publicly readable.
+- Persist the combined virtual dataset in a few formats for downstream testing: an `icechunk` repo, a kerchunk JSON reference, and a parquet reference file. For reasons I also didn't bother investigating, I ran into issues writing the kerchunk reference straight into the bucket, but the icechunk one was fine. 
 
-- Anonymous reads: for public access use `anon=True` and `client_kwargs` pointing at `https://projects.pawsey.org.au`. If you need writes or private reads then supply `ACCESS_KEY_ID` / `SECRET_ACCESS_KEY` to `S3Store` and `icechunk`.
-- Backend oddities: register `numcodecs.zarr3` when needed and prefer `consolidated=False` for this workflow. If warnings get noisy, suppress them locally — but remember that suppression doesn't propagate to separate Dask workers, so you may need to configure worker logging.
-- S3 quirks: use `force_path_style=True` and set the right `endpoint_url` for Acacia (or any S3-compatible store).
-
-Why this matters
-
-Publishing kerchunk references lets you serve arbitrarily large model output without copying the petabytes. Consumers stream exactly what they need and the same reference file works for both anonymous and credentialed clients (provided the storage options are set correctly).
-
-Quick reproduction
-
-1. Anonymous open (sanity check):
-
-```bash
-python -c "import xarray as xr; xr.open_dataset('s3://01deg/output980/iceh.2146-01.nc', engine='h5netcdf', backend_kwargs={'storage_options': {'anon': True, 'client_kwargs': {'endpoint_url': 'https://projects.pawsey.org.au'}}})"
-```
-
-2. Build a combined virtual dataset:
-
-Use `open_virtual_mfdataset(..., parallel='dask', combine='nested', concat_dim='time')` and add missing `ni`/`nj` coords before virtualising.
-
-3. Export kerchunk reference and open remotely:
-
-```py
-# inside notebook
-vds.vz.to_kerchunk(format='json')
-# upload the produced reference.json to your bucket and then open with reference:// + zarr backend
-```
-
-Next things to do
-
-- Add a compact runnable snippet to this page showing anonymous vs credentialed opens.
-- Spin up a tiny Dask cluster and test a longer time slice to validate behaviour at scale.
-
-— end of notes
+  This can be done with eg.
+  ```python
+  # Now put the virtual dataset in the bucket alongside the netcdf files
+  import icechunk
+  from pathlib import Path
+  
+  # Create a new repository instance with virtual chunk container permissions for reading
+  config = icechunk.RepositoryConfig.default()
+  config.set_virtual_chunk_container(
+      icechunk.VirtualChunkContainer(
+          url_prefix=f"{bucket}/",
+          store=icechunk.s3_store(
+              endpoint_url=endpoint,              # "https://projects.pawsey.org.au"
+              s3_compatible=True,
+              force_path_style=True,
+          )
+      ),
+  )
+  
+  credentials = icechunk.containers_credentials(
+      { 
+          bucket: icechunk.s3_credentials(
+              access_key_id=access_key_id, 
+              secret_access_key=secret_access_key,
+          )
+      }
+  )
+  
+  # Open the repository with the config that includes virtual chunk permissions
+  storage = icechunk.s3_storage(
+      bucket='01deg',
+      prefix='icechunk',
+      endpoint_url=endpoint,
+      access_key_id=access_key_id,
+      secret_access_key=secret_access_key,
+      force_path_style=True,
+  )
+  
+  repo = icechunk.Repository.create(
+      storage,
+      config,
+      authorize_virtual_chunk_access=credentials
+  )
+  
+  # Write your virtual dataset to the repository
+  write_session = repo.writable_session("main")
+  combined_vds.vz.to_icechunk(write_session.store)
+  write_session.commit("Write Pawsey 01deg virtual dataset to acacia zarr store for testing")
+  ```
+  to write a virtual icechunk store into the bucket, or
+  ```python
+  combined_vds.vz.to_kerchunk(
+      filepath="file:///Users/u1166368/scratch/virtualizarr/pawsey/ref-01deg.json",
+  )
+  ```
+  to write it to a json file on my local machine. I'll come back to that later.
 
 ## Bucket permissions & CORS
+
+The data streaming app I built is totally serverless - the browser just fetches the data directly from the bucket, without any proxy, intermediate server, or auth flow. This is ideal for performance and user experience, but it does mean that the bucket needs to be configured to allow anonymous reads from browsers.
+
+This means we need to make two changes to the bucket policy:
+1. Allow public read access to objects the objects in the bucket. Note, we don't need to allow public read access to the bucket itself, just the objects - this means that users can fetch the data if they know the exact path, but they can't list all the contents of the bucket. We definite don't allow public write access, etc., because that would be a disaster.
+2. Set a CORS policy that allows simple `GET`/`HEAD` requests from the origins we want to allow. This is important because if the CORS policy isn't set up, our browser won't even try to fetch the data, and if we set it up in a way that causes preflight requests (e.g. by allowing `Authorization` headers), then we'll have a much worse user experience because of the extra round trip.
+    - I'm not sure I ever set the preflight stuff up properly.
+    - I also just allowed all origins. In a production system, you'd want to lock this down to the specific origins you expect to be accessing the data, but for testing, it's easier to just allow everything.
+
+- I'm not sure that I set the public read access correctly either - I'm probably a bit too much of a carefree loose unit with this stuff, but there's no sensitive data in there, and this is just a test anyway.
 
 If you want anonymous, fast reads from browsers you need just two small changes on the bucket: a public-read policy for objects and a minimal CORS configuration that only allows simple `GET`/`HEAD` calls from the origins you actually use. That keeps preflight traffic low and avoids forcing users through auth flows.
 
@@ -183,11 +297,9 @@ aws --endpoint-url=https://projects.pawsey.org.au s3api get-bucket-cors --bucket
 curl -I https://projects.pawsey.org.au/<BUCKET_NAME>/reference.json
 ```
 
-If you want I can drop the exact CLI invocations you used into this repo (public-read.json, list-policy.json, cors.json) so guys can copy-paste.
+### Exact policy files & commands (from my shell history)
 
-### Exact policy files & commands (from your shell history)
-
-These are the snippets you used for `icechunk-demo` (cleaned up):
+These are the exact policies I used for `01deg`  (cleaned up):
 
 `public-read.json`:
 
@@ -200,7 +312,7 @@ These are the snippets you used for `icechunk-demo` (cleaned up):
       "Effect": "Allow",
       "Principal": "*",
       "Action": "s3:GetObject",
-      "Resource": "arn:aws:s3:::icechunk-demo/*"
+      "Resource": "arn:aws:s3:::01deg/*"
     }
   ]
 }
@@ -216,38 +328,43 @@ These are the snippets you used for `icechunk-demo` (cleaned up):
       "Effect": "Allow",
       "Principal": {"AWS": ["arn:aws:iam:::user/cturner"]},
       "Action": "s3:ListBucket",
-      "Resource": ["arn:aws:s3:::icechunk-demo"]
+      "Resource": ["arn:aws:s3:::01deg"]
     }
   ]
 }
 ```
 
-Commands you ran (cleaned):
+Commands I ran (extracted from my shell history and cleaned):
 
 ```bash
-aws --endpoint-url=https://projects.pawsey.org.au s3api put-bucket-policy --bucket icechunk-demo --policy file://public-read.json
-aws --endpoint-url=https://projects.pawsey.org.au s3api put-bucket-policy --bucket icechunk-demo --policy file://list-policy.json
-aws --endpoint-url=https://projects.pawsey.org.au s3api put-bucket-cors --bucket icechunk-demo --cors-configuration file://cors.json
+aws --endpoint-url=https://projects.pawsey.org.au s3api put-bucket-policy --bucket 01deg --policy file://public-read.json
+aws --endpoint-url=https://projects.pawsey.org.au s3api put-bucket-policy --bucket 01deg --policy file://list-policy.json
+aws --endpoint-url=https://projects.pawsey.org.au s3api put-bucket-cors --bucket 01deg --cors-configuration file://cors.json
 
 # variants with profile
-aws --endpoint-url=https://projects.pawsey.org.au --profile=cturner s3api put-bucket-policy --bucket icechunk-demo --policy file://public-read.json
-aws --endpoint-url=https://projects.pawsey.org.au --profile=cturner s3api put-bucket-cors --bucket icechunk-demo --cors-configuration file://cors.json
+aws --endpoint-url=https://projects.pawsey.org.au --profile=cturner s3api put-bucket-policy --bucket 01deg --policy file://public-read.json
+aws --endpoint-url=https://projects.pawsey.org.au --profile=cturner s3api put-bucket-cors --bucket 01deg --cors-configuration file://cors.json
 
 # verify
-aws --endpoint-url=https://projects.pawsey.org.au s3api get-bucket-policy --bucket icechunk-demo
-aws --endpoint-url=https://projects.pawsey.org.au s3api get-bucket-cors --bucket icechunk-demo
-curl -I https://projects.pawsey.org.au/icechunk-demo/reference.json
+aws --endpoint-url=https://projects.pawsey.org.au s3api get-bucket-policy --bucket 01deg
+aws --endpoint-url=https://projects.pawsey.org.au s3api get-bucket-cors --bucket 01deg
+curl -I https://projects.pawsey.org.au/01deg/reference.json
 ```
 
-These are the cleaned, copy-paste ready versions. If you prefer the raw history output I can paste that too, or I can add these files to the repo for easy reuse.
-
+Note: AFAIK, you can only have one eg. bucket policy per bucket. I believe that I just overwrote public-read with list-policy. Actually figuring this all out is on my todo list
 ___
 
-# Okay... why?
+# Okay... why? What's the end goal?
 
 The guys over at carbonplan have been working on [this visualisation tool](https://github.com/carbonplan/zarr-layer), which I came across recently. I figured this was exactly what we needed in order to produce the over the wire data exploration tool which people wanted.
 
 Using zarr-layer, [zarrita](https://zarrita.dev/) (a typescript library for dealing with zarr files), and Claude Sonnet 4.6 to speed up the process, I managed to generate [this interactive data explorer](https://charles-turner-1.github.io/personal-homepage/#/projects/zarr-data-streamer) in about 2 hours.
+
+Remember how I said above that I couldn't figure out how to get the kerchunk reference file to read into/out of the acacia bucket correctly. In the end, I would up just saving it locally, and then shipping it to the browser as a static object with this data viewer. 
+
+Zarrita then just reads this local object out of the browsers javascript bundle, and from that knows how and where to fetch chunks from the acacia bucket on demand.
+
+This is something we should probably figure out - its probably cleaner to keep it in the bucket, and then fetch it when we need it, rather than with every load of my homepage, but Rome wasn't built in a day.
 
 This demo is still obviously very rough and ready - it's still on native grids for a start - but it's clearly a massive improvement over current data exploration tools, and surprisingly easy to get working. It turns out you can get a lot done by grabbing onto the coattails of very smart people.
 
@@ -262,14 +379,23 @@ Unfortunately, we deal with making climate data available to scientists in Austa
 1. Move the data to Acacia and host it from there. This is a bit of a non starter for a lot of reasons - but most of the work the climate science community does on HPC is on Gadi. So we'd either have to duplicate the data, or stream it back to Gadi. Neither of these are really tenable.
 2. See if we can do the same thing on NCI's object storage, Nirin.
 
-## Why Nirin felt harder
+It turns out the answer to the second question is... maybe? 
+1. It's a lot more fiddly than Acacia, and there are some pretty big performance issues to work through.
+2. I haven't yet figured out whether it's possible to read the chunks the references point to from outside Gadi. Some of the documentation suggests it might be possible via NFS mounts, but I haven't gotten that working yet. 
 
-I ran the same experiments on Nirin and hit a different set of operational annoyances compared with Acacia. Short version:
+Still, it's a step in the right direction.
+
+## Why Nirin feels harder
+
+I ran the same experiments on Nirin and hit a different (unfortunately bigger) set of operational annoyances compared with Acacia. Short version:
 
 - Protocol & gateway differences: Nirin exposes both Swift and an S3 gateway (e.g. `https://cloud.nci.org.au:8080/swift/...` and `s3://ct-icechunk-root/...`). In these experiments, I accessed the kerchunk reference remotely  via the Swift endpoint while icechunk tests used the S3 gateway + credentials. This is because apparently public reads on Nirin buckets can only be achieved via Swift, not S3.
 - No anonymous S3 reads: the S3 gateway did not allow anonymous access. That means consumers need credentials, signed URLs, or a trusted proxy inside Nirin to serve data. This means that if we want to read the icechunk store remotely, we need to provide credentials, as icechunk doesn't support swift.
 - Performance variability: reads from ARE (interactive environment) over Swift were noticeably slower than remote reads. I think there is some throttling of downloads into an ARE session, for reasons I don't totally understand.
- With that said, it is still substantially faster to read the virtual references than the raw data: 2 minutes 40 for the non virtualised dataset, 45s for the kerchunk reference over swift into an ARE session, and 2.6 seconds for the kerchunk reference remotely.
+ 
+  With that said, it is still substantially faster to read the virtual references than the raw data: 2 minutes 40 for the non virtualised dataset, 45s for the kerchunk reference over swift into an ARE session, and 2.6 seconds for the kerchunk reference remotely.
+
+  Unfortunately, the performance improvement of kerchunk references will probably diminish for smaller datasets. I haven't run any scaling tests, but I assume that the end result will be that kerchunk will be much slower for virtualised datasets that only contain eg. ten files than just opening the files, if we access the reference via swift.
 - Weirdly, you don't see the same performance issues with icechunk: it reads in 1.6 seconds from within an ARE session, but takes 2.2 remotely. This makes a bit more sense *a priori*, but it's weird that we see such a massive slowdown via Swift, when it's actually faster via s3. 
 - Icechunk vs Swift: icechunk doesn't speak Swift, so writing icechunk repos required the S3 gateway and credentials — more friction than the Acacia case. 
 
@@ -277,7 +403,9 @@ I ran the same experiments on Nirin and hit a different set of operational annoy
 
   However, it does mean that the slowdown of kerchunk over Swift is more of an issue. Either we'd need to figure out how to speed up access to the kerchunk reference over Swift, or make the s3 gateway support anonymous reads and then read the kerchunk reference via that.
 - Compute-node access: the other big operational question for putting virtual reference datasets on Gadi is whether compute nodes can talk to Nirin endpoints directly. If they can't, then you'd need to have these references on the posix filesystem somewhere too. This is fine - in theory - but the number of these we'd be creating increases the risk that something gets out of sync. It seems like the atomicity guarantees that Swift provides aren't particularly great either...
-- Documentation: The documentation for Acacia is really pretty clear, and easy to follow. Acacia is built on Ceph, and access if using the aws cli. In contrast, Nirin has multiple access methods (Swift, S3 gateway) and the documentation is a quite a bit less complete. It also doesn't seem to be up to date: lots of things I tried seemed to no longer be true. It also contains gems like this:
+- In the other direction, if we want to read the chunks out of the virtual references, we need some way of doing that. As of right now, this is an unresolved question. Maybe we'll get there eventually, but it's definitely not going to be as easy as with Acacia.
+
+- Documentation: The documentation for Acacia is really pretty clear, and easy to follow. Acacia is built on Ceph, and access is using the AWS CLI. In contrast, Nirin has multiple access methods (Swift, S3 gateway) and the documentation is a quite a bit less complete. It also doesn't seem to be up to date: lots of things I tried seemed to no longer be true. It also contains gems like this:
 
     > The Nirin Cloud integrated object storage service supports a subset of the Swift and S3 access control mechanisms, with additional constraints which make them very limited for practical use. The NCI Cloud Team does not recommend the use of anything beyond the simplest case of enabling public read access to a container, which can be done via a simple check box for each container in the dashboard's Object Store → Containers tab.
 
@@ -295,3 +423,13 @@ Recommendations for Nirin
 - Consider placing the interactive catalog/parquet files in Nirin object storage (if compute nodes can read them) to reduce cross-site syncing.
 
 Bottom line: Nirin is usable, but the lack of anonymous S3 reads and the Swift/S3 performance differences make it more operationally fiddly than Acacia. The usual workarounds are: enable anonymous access, run a small trusted proxy inside Nirin, or accept credentialed access with careful secret management.
+
+
+___
+
+# Some final thoughts
+
+- The fact that one man in a shed in Western Australia can do all this in this in a few days is pretty amazing, and it's a testament to the work of the people who built these tools. It's also a testament to the power of open source software and the scientific Python ecosystem. In particular, big shoutout to Tom Nicholas and Martin Durant for their work on virtualizarr and kerchunk, which made this all possible, the entire earthmover team for what they've been doing in this area (including open sourcing icechunk), and the carbonplan team for zarr-layer.
+- Shout out to Dougie Squire and Thomas Moore, amongst others, for really pushing these ideas in Autralia. If they hadn't been so keen on these things, I think it would have taken me a lot longer to discover the possibilities in this space.
+- Building reliable infrastructure is really tough - it's no wonder that Amazon have been so successful, having more or less cracked the problem. It's amazing that Pawsey and NCI are able to replicate this functionality on a much tighter budget.
+- We already have the tools and infrastructure to distribute data effectively, here in Australia. We just need to make use of them.
